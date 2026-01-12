@@ -1,3 +1,7 @@
+# Genstaller v1.2.5
+Patch Notes:
+- Fixed an issue where selecting systemd would lead to the script crashing due to use flag conflicts.
+
 # Genstaller v1.2.4
 Patch Notes:
 - Fixed an issue that caused the stage file to loop indefinitely.
@@ -9,7 +13,6 @@ Update Notes:
 - Added a choice for Nvidia or Amd graphics.
 - Added a choice to set the date at the beginning the script after the root check and networking check.
 - Added support for all devices. Vda, NVMe, sda, usb, etc... no longer bound to only 2 choices.
-Patch Notes:
 - Fixed the text editor choice not recognizing "none" as an option
 - Fixed the fstab configuration not being positioned properly
 - Fixed the Hostname configuration being repetative in what it prints into the console
