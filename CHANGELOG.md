@@ -1,3 +1,7 @@
+# Genstaller v1.2.6
+Patch Notes:
+- Fixed an issue where selecting systemd would make the script crash due to networking still being entirely done under openrc.
+
 # Genstaller v1.2.5
 Patch Notes:
 - Fixed an issue where selecting systemd would lead to the script crashing due to use flag conflicts.
