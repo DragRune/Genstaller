@@ -42,8 +42,8 @@ fi
 echo "What is the current time?"
 while true; do
 	read -r -p "Please use MMDDhhmmYYYY format: " time_set
+	echo "You have chosen the time to be:"
 	date "$time_set"
-	echo "You have chosen the time to be: "(date)
 	echo "Is this time correct?"
 	read -r -p "Please answer Y/N: " time_conf
 	if [ "$time_conf" = "y" ]; then
@@ -156,6 +156,7 @@ while true; do
 		echo "Writing make.conf"
 		echo 'USE="-systemd elogind dbus"' | tee -a "$GEN"/etc/portage/make.conf
 		echo "Done!"
+		break
 	elif [ "$init_choice" = "systemd" ]; then
 		echo "Acquiring stage file"
 		wget https://gentoo.osuosl.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/latest-stage3-amd64-systemd.txt
@@ -168,6 +169,7 @@ while true; do
 		echo "Writing make.conf"
 		echo 'USE="systemd elogind dbus"' | tee -a "$GEN"/etc/portage/make.conf
 		echo "Done!"
+		break
 	else
 		echo "Invalid input."
 	fi
