@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-echo "This is Genstaller v1.2.5"
+echo "This is Genstaller v1.2.6"
 
 # Root Check
 if [[ $EUID -ne 0 ]]; then
