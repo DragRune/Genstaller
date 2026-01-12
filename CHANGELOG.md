@@ -1,6 +1,7 @@
 # Genstaller v1.2.7
 Patch Notes:
 - Fixed an issue where the script would crash while setting up networking for systemd.
+- Fixed the user configuration not recognizing variables AGAIN.
 
 # Genstaller v1.2.6
 Patch Notes:
