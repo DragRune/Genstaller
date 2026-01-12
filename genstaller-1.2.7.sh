@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-echo "This is Genstaller v1.2.6"
+echo "This is Genstaller v1.2.7"
 
 # Root Check
 if [[ $EUID -ne 0 ]]; then
@@ -477,12 +477,14 @@ fi
 EOF
 
 # User configuration
-read -r -p "Please create a username for the user: " NEWUSER
-echo Adding user "$NEWUSER" with the following groups
-echo "users,wheel,video,audio,input"
+while true; do
+	read -r -p "Please create a username for the user: " NEWUSER
+	echo Adding user "$NEWUSER" with the following groups
+	echo "users,wheel,video,audio,input"
 chroot "$GEN" /bin/bash << 'EOF'
 useradd -m -G users,wheel,video,audio,input -s /bin/bash "$NEWUSER"
 EOF
+done
 
 # GPU
 echo "What kind of GPU do you have?"
