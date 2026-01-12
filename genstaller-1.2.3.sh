@@ -141,7 +141,7 @@ swapon "$PART2"
 lsblk
 
 # Stage file
-echo "Would you like to use OpenRC or SystemD?
+echo "Would you like to use OpenRC or SystemD?"
 while true; do
 	read -r -p 'Please state "openrc" or "systemd" in lowercase: ' init_choice
 	if [ "$init_choice" = "openrc" ]; then
