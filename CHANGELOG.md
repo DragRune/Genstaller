@@ -1,4 +1,11 @@
+# Genstaller v1.2.9
+Patch Notes:
+- Fixed an issue where hostname didn't work in networking.
+- Fixed the issue with nvidia drivers being masked.
+- Fixed the kernel choice being slightly repetitive when a choice other than "1" or "2" is made.
+
 # Genstaller v1.2.8
+Patch Notes:
 - Fixed variables not carrying over due to improper quotation all over the script, this includes the user config issues.
 
 # Genstaller v1.2.7
