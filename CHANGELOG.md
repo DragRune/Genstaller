@@ -1,3 +1,6 @@
+# Genstaller v1.2.8
+- Fixed variables not carrying over due to improper quotation all over the script, this includes the user config issues.
+
 # Genstaller v1.2.7
 Patch Notes:
 - Fixed an issue where the script would crash while setting up networking for systemd.
