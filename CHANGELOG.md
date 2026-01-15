@@ -1,3 +1,7 @@
+# Genstaller v1.2.10
+Patch Notes:
+- Fixed an issue where net_name wasn't set properly.
+
 # Genstaller v1.2.9
 Patch Notes:
 - Fixed an issue where hostname didn't work in networking.
