@@ -139,6 +139,8 @@ EOF
     mkdir -p "$GEN"
     mount "$PART3" "$GEN"
     swapon "$PART2"
+    mkdir -p "$GEN"/boot/efi/
+    mount "$PART1" "$GEN"/boot/efi/
     lsblk
 }
 
@@ -171,7 +173,13 @@ SystemD() {
 }
 
 MakeConf() {
-    echo 'MAKEOPTS="-j8 -l9"' | tee -a "$GEN"/etc/portage/make.conf
+    cp ./configs/make.conf "$GEN"/etc/portage/make.conf
+    echo "MAKEOPTS=\"-j$(nproc) -l$(nproc)\"" >>"$GEN"/etc/portage/make.conf
+}
+
+BinHostSetup() {
+    cp ./configs/gentoobinhost.conf "$GEN"/etc/portage/binrepos.conf/gentoobinhost.conf
+    echo "FEATURES=\"\${FEATURES} getbinpkg binpkg-request-signature\"" >>"$GEN"/etc/portage/make.conf
 }
 
 InitialChroot() {
@@ -185,7 +193,7 @@ echo "Sourcing /etc/profile"
 source /etc/profile
 export PS1="(Gentoo Chroot) ${PS1}"
 echo "Mounting Boot"
-mount --mkdir /dev/sda1 /boot/efi
+# mount --mkdir /dev/sda1 /boot/efi
 echo "Running emerge-webrsync"
 emerge-webrsync
 echo "Done!"
@@ -193,6 +201,18 @@ echo "Done!"
 # Eselect profile & Emerge syncing
 echo "Setting eselect profile"
 eselect profile set "default/linux/amd64/23.0"
+EOF
+}
+
+GitConfig() {
+    cp ./configs/gentoo.conf "$GEN"
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Setting Git Sync"
+emerge -v dev-vcs/git
+rm -rf /var/db/repos/gentoo/
+mkdir -p /etc/portage/repos.conf/
+mv /gentoo.conf /etc/portage/repos.conf/gentoo.conf
+emerge --sync
 EOF
 }
 
@@ -302,13 +322,15 @@ Configurefstab() {
     DISK1="${DISK}1"
     DISK2="${DISK}2"
     DISK3="${DISK}3"
-    chroot "$GEN" /bin/bash <<'EOF'
-echo "Setting up fstab"
-cat > /etc/fstab << FSTAB
+    cat >./configs/fstab <<FSTAB
 $DISK1 /boot/efi vfat defaults 0 2
 $DISK2 none swap sw 0 0
 $DISK3 / ext4 noatime 0 1
 FSTAB
+    cp ./configs/fstab "$GEN"
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Setting up fstab"
+mv /fstab /etc/fstab
 echo "Done!"
 EOF
 }
@@ -323,9 +345,9 @@ emerge --verbose net-misc/dhcpcd
 eselect news read
 emerge --verbose --noreplace net-misc/netifrc
 eselect news read
-echo "config_\$NET_IF=\"dhcp\"" >> /etc/conf.d/net
-ln -s /etc/init.d/net.lo /etc/init.d/net.\$NET_IF
-rc-update add net.\$NET_IF default
+echo "config_\${NET_IF}=\"dhcp\"" >> /etc/conf.d/net
+ln -s /etc/init.d/net.lo /etc/init.d/net.\${NET_IF}
+rc-update add net.\${NET_IF} default
 EOF
 }
 
@@ -360,6 +382,9 @@ AddUser() {
     echo "users,wheel,video,audio,input"
     chroot "$GEN" /bin/bash <<EOF
 useradd -m -G users,wheel,video,audio,input -s /bin/bash "$NEWUSER"
+passwd "$NEWUSER"
+"$PASSWD"
+"$PASSWD"
 EOF
 }
 
@@ -418,6 +443,21 @@ while true; do
 done
 MakeConf
 
+echo "Would you like to have a binhost? : Reduces compile overhead by installed prebuilt binaries"
+while true; do
+    read -r -p 'Please answer Y/N: ' bin_host
+    if [ "$bin_host" = "y" ] || [ "$bin_host" = "Y" ]; then
+        BinHostSetup
+        echo "Binhost setup successful"
+        break
+    elif [ "$bin_host" = "n" ] || [ "$bin_host" = "N" ]; then
+        echo "Binhost not configured"
+        break
+    else
+        echo "Invalid Input"
+    fi
+done
+
 echo "Mounting needed things for a proper chroot environment."
 cp --dereference /etc/resolv.conf "$GEN"/etc
 mount --types proc /proc "$GEN"/proc
@@ -430,6 +470,23 @@ mount --make-slave "$GEN"/run
 echo "Done!"
 echo "Chrooting..."
 InitialChroot
+
+echo "Would you like to sync via git instead of rsync?"
+echo "Note: Some networks blocks rsync ports causing issues with syncing to portage tree."
+echo "Note: git is sometimes faster than rsync"
+while true; do
+    read -r -p "Please answer [Y/N]: " sync_choice
+    if [ "$sync_choice" = "y" ] || [ "$sync_choice" = "Y" ]; then
+        GitConfig
+        echo "Git Setup Successful"
+        break
+    elif [ "$sync_choice" = "n" ] || [ "$sync_choice" = "N" ]; then
+        echo "Using Rsync for syncing"
+        break
+    else
+        echo "Invalid Input"
+    fi
+done
 
 echo "Would you like to emerge @world?"
 echo "This is optional, but HIGHLY recommended."
@@ -577,6 +634,7 @@ fi
 EOF
 
 read -r -p "Please create a username for the user: " NEWUSER
+read -r -p "Please enter the password for the user: " PASSWD
 AddUser
 
 echo "What kind of GPU do you have?"
