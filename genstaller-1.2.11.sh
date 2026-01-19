@@ -299,11 +299,16 @@ EOF
 }
 
 Configurefstab() {
+    DISK1="${DISK}1"
+    DISK2="${DISK}2"
+    DISK3="${DISK}3"
     chroot "$GEN" /bin/bash <<'EOF'
-echo "Setting up Fstab"
-echo $DISK"1     /boot/efi   vfat        defaults    0 2" | tee -a /etc/fstab
-echo $DISK"2     none   swap        sw    0 0" | tee -a /etc/fstab
-echo $DISK"3     /   ext4        noatime    0 1" | tee -a /etc/fstab
+echo "Setting up fstab"
+cat > /etc/fstab << FSTAB
+$DISK1 /boot/efi vfat defaults 0 2
+$DISK2 none swap sw 0 0
+$DISK3 / ext4 noatime 0 1
+FSTAB
 echo "Done!"
 EOF
 }
@@ -311,14 +316,16 @@ EOF
 ConfigureNetifrc() {
     net_name="$(ip route get 8.8.8.8 | awk '{print $5}')"
     chroot "$GEN" /bin/bash <<'EOF'
+NET_IF="$net_name"
+
 echo 127.0.0.1 "$HNAME" | tee -a /etc/hosts
 emerge --verbose net-misc/dhcpcd
 eselect news read
 emerge --verbose --noreplace net-misc/netifrc
 eselect news read
-echo config_"$net_name"='"dhcp"' | tee -a /etc/conf.d/net
-ln -s /etc/init.d/net.lo /etc/init.d/net."$net_name"
-rc-update add net."$net_name" default
+echo "config_\$NET_IF=\"dhcp\"" >> /etc/conf.d/net
+ln -s /etc/init.d/net.lo /etc/init.d/net.\$NET_IF
+rc-update add net.\$NET_IF default
 EOF
 }
 
