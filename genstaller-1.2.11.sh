@@ -69,13 +69,7 @@ GetTime() {
     done
 }
 
-# TODO: Modify this so that we don't take input inside the function
 DiskSetup() {
-    # Drive wiping
-    echo "Next is your drive. Review this to find the drive you want to partition:"
-    lsblk
-    read -r -p "Please firmly state the end of your drive (example: nvme0 ) in lowercase: " disk_choice
-    DISK=/dev/"$disk_choice"
     echo Preparing to wipe your "$disk_choice" drive
     echo "CTRL + C to cancel..."
     sleep 1
@@ -141,10 +135,7 @@ EOF
     echo "Done!"
     lsblk
 
-    #TODO: Send the below part outside the function to global scope
-
     # Mounting Partitions + Making /mnt/gentoo
-    GEN=/mnt/gentoo
     mkdir -p "$GEN"
     mount "$PART3" "$GEN"
     swapon "$PART2"
@@ -182,3 +173,432 @@ SystemD() {
 MakeConf() {
     echo 'MAKEOPTS="-j8 -l9"' | tee -a "$GEN"/etc/portage/make.conf
 }
+
+InitialChroot() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Chrooted!"
+
+# =====BEGINNING OF CHROOT ENVIRONMENT=====
+
+# First Chroot Commands
+echo "Sourcing /etc/profile"
+source /etc/profile
+export PS1="(Gentoo Chroot) ${PS1}"
+echo "Mounting Boot"
+mount --mkdir /dev/sda1 /boot/efi
+echo "Running emerge-webrsync"
+emerge-webrsync
+echo "Done!"
+
+# Eselect profile & Emerge syncing
+echo "Setting eselect profile"
+eselect profile set "default/linux/amd64/23.0"
+EOF
+}
+
+EmergeWorld() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Emerging @world"
+emerge -vuUD --with-bdeps=y @world
+EOF
+}
+
+InstallVim() {
+    chroot "$GEN" /bin/bash <<'EOF'
+emerge -v app-editors/vim
+EOF
+}
+
+InstallNeovim() {
+    chroot "$GEN" /bin/bash <<'EOF'
+emerge -v app-editors/neovim
+EOF
+}
+
+InstallNano() {
+    chroot "$GEN" /bin/bash <<'EOF'
+emerge -v app-editors/nano
+EOF
+}
+
+InstallEmacs() {
+    chroot "$GEN" /bin/bash <<'EOF'
+emerge -v app-editors/emacs
+EOF
+}
+
+LocaleGeneration() {
+    chroot "$GEN" /bin/bash <<'EOF'
+# Locale Generation
+echo "Linking timezone information"
+ln -sf /usr/share/zoneinfo/America/Indiana/Indianapolis /etc/localtime
+echo "Setting locale"
+grep -q '^en_US.UTF-8 UTF-8$' /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+locale-gen
+TARGET_LOCALE="en_US.UTF-8"
+eselect locale set "$TARGET_LOCALE"
+echo "Done!"
+EOF
+}
+
+UpdateEnv() {
+    chroot "$GEN" /bin/bash <<'EOF'
+# Environment Update
+echo "Updating environment"
+sleep 1
+env-update && source /etc/profile && export PS1="(Gentoo Chroot) $PS1"
+echo "Done"
+EOF
+}
+
+Firmware() {
+    chroot "$GEN" /bin/bash <<'EOF'
+# Firmware compilation
+echo "Preparing for firmware compilation"
+echo "sys-kernel/linux-firmware @BINARY-REDISTRIBUTABLE" | tee -a /etc/portage/package.license
+echo "Done! Compiling firmware"
+emerge -v sys-kernel/linux-firmware
+eselect news read
+echo "Done!"
+EOF
+}
+
+BinKernel() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Preparing for gentoo-bin kernel compilation"
+echo "sys-kernel/installkernel dracut grub" >> /etc/portage/package.use/installkernel
+emerge -v sys-kernel/installkernel
+eselect news read
+echo "Note: This command can take an excessive amount of time."
+echo "That being said, please have no concern if it's lengthy."
+echo "Beginning gentoo-bin kernel compilation now"
+emerge --quiet sys-kernel/gentoo-kernel-bin
+eselect news read
+echo "Done!"
+echo "Compiling grub bootloader"
+echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf
+emerge -v sys-boot/grub efibootmgr
+grub-install --efi-directory=/boot/efi
+grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+}
+
+CustomKernel() {
+    chroot "$GEN" /bin/bash <<'EOF'
+emerge -v sys-kernel/modprobed-db
+emerge -v sys-kernel/gentoo-sources
+EOF
+}
+
+GrubBootLoader() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf
+emerge --verbose sys-boot/grub efibootmgr
+grub-install --efi-directory=/boot/efi
+EOF
+}
+
+Configurefstab() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Setting up Fstab"
+echo $DISK"1     /boot/efi   vfat        defaults    0 2" | tee -a /etc/fstab
+echo $DISK"2     none   swap        sw    0 0" | tee -a /etc/fstab
+echo $DISK"3     /   ext4        noatime    0 1" | tee -a /etc/fstab
+echo "Done!"
+EOF
+}
+
+ConfigureNetifrc() {
+    net_name="$(ip route get 8.8.8.8 | awk '{print $5}')"
+    chroot "$GEN" /bin/bash <<'EOF'
+echo 127.0.0.1 "$HNAME" | tee -a /etc/hosts
+emerge --verbose net-misc/dhcpcd
+eselect news read
+emerge --verbose --noreplace net-misc/netifrc
+eselect news read
+echo config_"$net_name"='"dhcp"' | tee -a /etc/conf.d/net
+ln -s /etc/init.d/net.lo /etc/init.d/net."$net_name"
+rc-update add net."$net_name" default
+EOF
+}
+
+ConfigureNetworkManager() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo 127.0.0.1 "$HNAME" | tee -a /etc/hosts
+emerge --verbose net-misc/networkmanager
+systemctl enable NetworkManager
+EOF
+}
+
+ConfigureSudo() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Emerging sudo"
+emerge --verbose app-admin/sudo
+echo "Configuring sudo"
+echo "%wheel ALL=(ALL:ALL) ALL" | tee -a /etc/sudoers
+EOF
+}
+
+ConfigureDoas() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Emerging doas"
+emerge --verbose app-admin/doas
+echo "Configuring doas"
+echo "permit :wheel" | tee -a /etc/doas.conf
+EOF
+}
+
+AddUser() {
+    echo Adding user "$NEWUSER" with the following groups
+    echo "users,wheel,video,audio,input"
+    chroot "$GEN" /bin/bash <<EOF
+useradd -m -G users,wheel,video,audio,input -s /bin/bash "$NEWUSER"
+EOF
+}
+
+NvidiaDriver() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "x11-drivers/nvidia-drivers NVIDIA-2025" | tee -a /etc/portage/package.license
+emerge --verbose x11-drivers/nvidia-drivers
+EOF
+}
+
+RootCheck
+TestNetwork
+
+echo "What is the current time?"
+while true; do
+    read -r -p "Please use MMDDhhmmYYYY format: " time_set
+    echo "You have chosen the time to be:"
+    date "$time_set"
+    echo "Is this time correct?"
+    read -r -p "Please answer Y/N: " time_conf
+    if [ "$time_conf" = "y" ]; then
+        echo "Got it, proceeding"
+        break
+    elif [ "$time_conf" = "Y" ]; then
+        echo "Got it, proceeding"
+        break
+    elif [ "$time_conf" = "n" ]; then
+        echo "Understood, perhaps the time was entered incorrectly."
+        echo "Running it back..."
+    elif [ "$time_conf" = "N" ]; then
+        echo "Understood, perhaps the time was entered incorrectly."
+        echo "Running it back..."
+    else
+        echo "Invalid input"
+    fi
+done
+
+echo "Next is your drive. Review this to find the drive you want to partition:"
+lsblk
+read -r -p "Please firmly state the end of your drive (example: nvme0 ) in lowercase: " disk_choice
+DISK=/dev/"$disk_choice"
+GEN=/mnt/gentoo
+DiskSetup
+echo "Would you like to use OpenRC or SystemD?"
+while true; do
+    read -r -p 'Please state "openrc" or "systemd" in lowercase: ' init_choice
+    if [ "$init_choice" = "openrc" ]; then
+        OpenRC
+        break
+    elif [ "$init_choice" = "systemd" ]; then
+        SystemD
+        break
+    else
+        echo "Invalid Input"
+    fi
+done
+MakeConf
+
+echo "Mounting needed things for a proper chroot environment."
+cp --dereference /etc/resolv.conf "$GEN"/etc
+mount --types proc /proc "$GEN"/proc
+mount --rbind /sys "$GEN"/sys
+mount --make-rslave "$GEN"/sys
+mount --rbind /dev "$GEN"/dev
+mount --make-rslave "$GEN"/dev
+mount --bind /run "$GEN"/run
+mount --make-slave "$GEN"/run
+echo "Done!"
+echo "Chrooting..."
+InitialChroot
+
+echo "Would you like to emerge @world?"
+echo "This is optional, but HIGHLY recommended."
+echo "Note: The time this command takes varies."
+while true; do
+    read -r -p "Please answer [Y/N]: " world_choice
+    if [ "$world_choice" = "y" ]; then
+        EmergeWorld
+        break
+    elif [ "$world_choice" = "Y" ]; then
+        EmergeWorld
+        break
+    elif [ "$world_choice" = "n" ]; then
+        echo "Will not emerge @world"
+        break
+    elif [ "$world_choice" = "N" ]; then
+        echo "Will not emerge @world"
+        break
+    else
+        echo "Invalid input."
+    fi
+done
+
+chroot "$GEN" /bin/bash <<'EOF'
+eselect news read
+echo "Done!"
+EOF
+
+echo "You have the choice of 4 popular text editors"
+echo 'if your prefered option is not listed, please firmly state "none"'
+echo "- nano"
+echo "- vim"
+echo "- neovim"
+echo "- emacs"
+while true; do
+    read -r -p "Please cleanly state your choice in lowercase for your selection: " text_choice
+    if [ "$text_choice" = "neovim" ]; then
+        InstallNeovim
+        break
+    elif [ "$text_choice" = "vim" ]; then
+        InstallVim
+        break
+    elif [ "$text_choice" = "nano" ]; then
+        InstallNano
+        break
+    elif [ "$text_choice" = "emacs" ]; then
+        InstallEmacs
+        break
+    elif [ "$text_choice" = "none" ]; then
+        break
+    else
+        echo "Invalid input. Your choices must be one of the following choices:"
+        echo "- nano"
+        echo "- vim"
+        echo "- neovim"
+        echo "- emacs"
+        echo "- none"
+    fi
+done
+
+LocaleGeneration
+UpdateEnv
+Firmware
+
+echo "Do you wish to use your own kernel? Or the gentoo-bin kernel?"
+while true; do
+    read -r -p 'Please state "1" for your own kernel, or "2" for the gentoo-bin kernel: ' kernel_choice
+    if [ "$kernel_choice" = "2" ]; then
+        BinKernel
+        break
+    elif [ "$kernel_choice" = "1" ]; then
+        echo "Understood, own kernel. Emerging necessary tools"
+        CustomKernel
+        echo "Seeing as you are building your own kernel,"
+        echo "would you like for grub to be installed but unconfigured?"
+        read -r -p "Please answer Y/N: " own_kernel_choice
+        if [ "$own_kernel_choice" = "y" ]; then
+            echo "Got it, emerging grub bootloader"
+            GrubBootLoader
+            break
+        elif [ "$own_kernel_choice" = "Y" ]; then
+            echo "Got it, emerging grub bootloader"
+            GrubBootLoader
+            break
+        elif [ "$own_kernel_choice" = "n" ]; then
+            echo "Got it. A bootloader will NOT be installed"
+            break
+        elif [ "$own_kernel_choice" = "N" ]; then
+            echo "Got it. A bootloader will NOT be installed"
+            break
+        fi
+    else
+        echo "Invalid input."
+    fi
+done
+
+Configurefstab
+read -r -p "Please state your preferred hostname: " hname_choice
+echo You have chosen the hostname "$hname_choice"
+chroot "$GEN" /bin/bash <<EOF
+echo hostname="$hname_choice" | tee -a /etc/conf.d/hostname
+EOF
+echo "Done!"
+HNAME="$hname_choice"
+
+echo "Is this build with SystemD? or OpenRC?"
+while true; do
+    read -r -p 'Please clearly state "systemd" or "openrc" in lowercase for your selection: ' init_conf
+    if [ "$init_conf" = "openrc" ]; then
+        echo "Setting up networking"
+        ConfigureNetifrc
+        echo "Done"
+        break
+    elif [ "$init_conf" = "systemd" ]; then
+        echo "Setting up networking"
+        ConfigureNetworkManager
+        echo "Done"
+        break
+    else
+        echo "Invalid input"
+    fi
+done
+
+echo "What is your preferred privilege escalation tool?"
+echo "Do you prefer Doas, or Sudo?"
+while true; do
+    read -r -p "Please cleanly state doas or sudo in lowercase for your selection: " sudo_choice
+    if [ "$sudo_choice" = "sudo" ]; then
+        ConfigureSudo
+        break
+    elif [ "$sudo_choice" = "doas" ]; then
+        ConfigureDoas
+        break
+    else
+        echo "Invalid input. Please enter sudo or doas."
+    fi
+done
+
+chroot "$GEN" /bin/bash <<'EOF'
+
+# Grub boot loader config
+if [ "$kernel_choice" = "2" ]; then
+grub-mkconfig -o /boot/grub/grub.cfg
+fi
+EOF
+
+read -r -p "Please create a username for the user: " NEWUSER
+AddUser
+
+echo "What kind of GPU do you have?"
+while true; do
+    read -r -p 'Please state "nvidia" or "amd" in lowercase: ' gpu_choice
+    if [ "$gpu_choice" = "nvidia" ]; then
+        echo "Got it. Emerging necessary drivers"
+        NvidiaDriver
+        echo "Done"
+        break
+    elif [ "$gpu_choice" = "amd" ]; then
+        echo "Got it. proceeding"
+        break
+    else
+        echo "Invalid input."
+    fi
+done
+
+echo "Leaving Chroot environment"
+# =====END OF CHROOT ENVIRONMENT=====
+
+echo "Done!"
+lsblk
+ls "$GEN"
+
+echo "The installer has finished!
+Please let it be known passwords have not been set!
+Please feel free to reboot when ready!
+Thank you for choosing Genstaller!
+===== Created by DragRune =====
+Questions? Contact me on Discord:
+real_djkevin"
