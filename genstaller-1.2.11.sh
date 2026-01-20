@@ -43,32 +43,6 @@ TestNetwork() {
     fi
 }
 
-GetTime() {
-    echo "What is the current time?"
-    while true; do
-        read -r -p "Please use MMDDhhmmYYYY format: " time_set
-        echo "You have chosen the time to be:"
-        date "$time_set"
-        echo "Is this time correct?"
-        read -r -p "Please answer Y/N: " time_conf
-        if [ "$time_conf" = "y" ]; then
-            echo "Got it, proceeding"
-            break
-        elif [ "$time_conf" = "Y" ]; then
-            echo "Got it, proceeding"
-            break
-        elif [ "$time_conf" = "n" ]; then
-            echo "Understood, perhaps the time was entered incorrectly."
-            echo "Running it back..."
-        elif [ "$time_conf" = "N" ]; then
-            echo "Understood, perhaps the time was entered incorrectly."
-            echo "Running it back..."
-        else
-            echo "Invalid input"
-        fi
-    done
-}
-
 DiskSetup() {
     echo Preparing to wipe your "$disk_choice" drive
     echo "CTRL + C to cancel..."
@@ -153,8 +127,6 @@ OpenRC() {
     echo "Extracting stage file"
     tar xpvf "$STAGE_FILE" --xattrs-include='*.*' --numeric-owner -C "$GEN"
     echo "Stage file has finished extracting!"
-    echo "Writing make.conf"
-    echo 'USE="-systemd elogind dbus X harfbuzz"' | tee -a "$GEN"/etc/portage/make.conf
     echo "Done!"
 }
 
@@ -167,19 +139,36 @@ SystemD() {
     echo "Extracting stage file"
     tar xpvf "$STAGE_FILE" --xattrs-include='*.*' --numeric-owner -C "$GEN"
     echo "Stage file has finished extracting!"
-    echo "Writing make.conf"
-    echo 'USE="systemd dbus X harfbuzz"' | tee -a "$GEN"/etc/portage/make.conf
     echo "Done!"
 }
 
 MakeConf() {
     cp ./configs/make.conf "$GEN"/etc/portage/make.conf
     echo "MAKEOPTS=\"-j$(nproc) -l$(nproc)\"" >>"$GEN"/etc/portage/make.conf
+    if [ "$INIT" = "openrc" ]; then
+        echo "USE=\"-systemd\"" >>"$GEN"/etc/portage/make.conf
+    fi
 }
 
 BinHostSetup() {
     cp ./configs/gentoobinhost.conf "$GEN"/etc/portage/binrepos.conf/gentoobinhost.conf
     echo "FEATURES=\"\${FEATURES} getbinpkg binpkg-request-signature\"" >>"$GEN"/etc/portage/make.conf
+}
+
+SetProfile() {
+    if [ "$INIT" = "openrc" ]; then
+        chroot "$GEN" /bin/bash <<'EOF'
+# Eselect profile & Emerge syncing
+echo "Setting OpenRC Profile"
+eselect profile set "$(eselect profile list | awk ' NR==2 { print $2 } ')"
+EOF
+    else
+        chroot "$GEN" /bin/bash <<'EOF'
+# Eselect profile & Emerge syncing
+echo "Setting SystemD Profile"
+eselect profile set "$(eselect profile list | awk ' NR==2 { print $2 } ')/systemd"
+EOF
+    fi
 }
 
 InitialChroot() {
@@ -193,15 +182,11 @@ echo "Sourcing /etc/profile"
 source /etc/profile
 export PS1="(Gentoo Chroot) ${PS1}"
 echo "Mounting Boot"
-# mount --mkdir /dev/sda1 /boot/efi
 echo "Running emerge-webrsync"
 emerge-webrsync
 echo "Done!"
-
-# Eselect profile & Emerge syncing
-echo "Setting eselect profile"
-eselect profile set "default/linux/amd64/23.0"
 EOF
+    SetProfile
 }
 
 GitConfig() {
@@ -247,6 +232,7 @@ emerge -v app-editors/emacs
 EOF
 }
 
+# TODO: Correct the Locale Gen so that it takes user input and then updates timezone
 LocaleGeneration() {
     chroot "$GEN" /bin/bash <<'EOF'
 # Locale Generation
@@ -283,6 +269,15 @@ echo "Done!"
 EOF
 }
 
+GrubBootLoader() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo "Compiling grub bootloader"
+echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf
+emerge -v sys-boot/grub efibootmgr
+grub-install --efi-directory=/boot/efi
+EOF
+}
+
 BinKernel() {
     chroot "$GEN" /bin/bash <<'EOF'
 echo "Preparing for gentoo-bin kernel compilation"
@@ -295,10 +290,9 @@ echo "Beginning gentoo-bin kernel compilation now"
 emerge --quiet sys-kernel/gentoo-kernel-bin
 eselect news read
 echo "Done!"
-echo "Compiling grub bootloader"
-echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf
-emerge -v sys-boot/grub efibootmgr
-grub-install --efi-directory=/boot/efi
+EOF
+    GrubBootLoader
+    chroot "$GEN" /bin/bash <<'EOF'
 grub-mkconfig -o /boot/grub/grub.cfg
 EOF
 }
@@ -307,14 +301,6 @@ CustomKernel() {
     chroot "$GEN" /bin/bash <<'EOF'
 emerge -v sys-kernel/modprobed-db
 emerge -v sys-kernel/gentoo-sources
-EOF
-}
-
-GrubBootLoader() {
-    chroot "$GEN" /bin/bash <<'EOF'
-echo 'GRUB_PLATFORMS="efi-64"' >> /etc/portage/make.conf
-emerge --verbose sys-boot/grub efibootmgr
-grub-install --efi-directory=/boot/efi
 EOF
 }
 
@@ -335,15 +321,14 @@ echo "Done!"
 EOF
 }
 
+# TODO: Modify the function to correctly symlink the internet
 ConfigureNetifrc() {
     net_name="$(ip route get 8.8.8.8 | awk '{print $5}')"
     chroot "$GEN" /bin/bash <<'EOF'
-NET_IF="$net_name"
-
-echo 127.0.0.1 "$HNAME" | tee -a /etc/hosts
-emerge --verbose net-misc/dhcpcd
+echo 127.0.0.1 "$HNAME" >> /etc/hosts
+emerge -v net-misc/dhcpcd
 eselect news read
-emerge --verbose --noreplace net-misc/netifrc
+emerge -v --noreplace net-misc/netifrc
 eselect news read
 echo "config_\${NET_IF}=\"dhcp\"" >> /etc/conf.d/net
 ln -s /etc/init.d/net.lo /etc/init.d/net.\${NET_IF}
@@ -351,27 +336,39 @@ rc-update add net.\${NET_IF} default
 EOF
 }
 
-ConfigureNetworkManager() {
-    chroot "$GEN" /bin/bash <<'EOF'
-echo 127.0.0.1 "$HNAME" | tee -a /etc/hosts
-emerge --verbose net-misc/networkmanager
+EnableNetworkManager() {
+    if [ "$INIT" = "openrc" ]; then
+        chroot "$GEN" /bin/bash <<'EOF'
+rc-update add NetworkManager default
+EOF
+    else
+        chroot "$GEN" /bin/bash <<'EOF'
 systemctl enable NetworkManager
 EOF
+    fi
+}
+
+ConfigureNetworkManager() {
+    chroot "$GEN" /bin/bash <<'EOF'
+echo 127.0.0.1 "$HNAME" >> /etc/hosts
+emerge -v net-misc/networkmanager
+EOF
+    EnableNetworkManager
 }
 
 ConfigureSudo() {
     chroot "$GEN" /bin/bash <<'EOF'
 echo "Emerging sudo"
-emerge --verbose app-admin/sudo
+emerge -v app-admin/sudo
 echo "Configuring sudo"
-echo "%wheel ALL=(ALL:ALL) ALL" | tee -a /etc/sudoers
+echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
 EOF
 }
 
 ConfigureDoas() {
     chroot "$GEN" /bin/bash <<'EOF'
 echo "Emerging doas"
-emerge --verbose app-admin/doas
+emerge -v app-admin/doas
 echo "Configuring doas"
 echo "permit :wheel" | tee -a /etc/doas.conf
 EOF
@@ -388,10 +385,12 @@ passwd "$NEWUSER"
 EOF
 }
 
+# TODO: Add the option of kernel-open for the blackwell series GPUs of Nvidia
 NvidiaDriver() {
     chroot "$GEN" /bin/bash <<'EOF'
-echo "x11-drivers/nvidia-drivers NVIDIA-2025" | tee -a /etc/portage/package.license
-emerge --verbose x11-drivers/nvidia-drivers
+echo "VIDEO_CARDS=\"nvidia\"" >> /etc/portage/make.conf
+echo "x11-drivers/nvidia-drivers NVIDIA-2025" >> /etc/portage/package.license
+emerge -v x11-drivers/nvidia-drivers
 EOF
 }
 
@@ -429,13 +428,17 @@ DISK=/dev/"$disk_choice"
 GEN=/mnt/gentoo
 DiskSetup
 echo "Would you like to use OpenRC or SystemD?"
+echo "1. openrc"
+echo "2. systemd"
 while true; do
-    read -r -p 'Please state "openrc" or "systemd" in lowercase: ' init_choice
-    if [ "$init_choice" = "openrc" ]; then
+    read -r -p 'Please select the between 1 and 2: ' init_choice
+    if [ "$init_choice" = "1" ]; then
+        INIT="openrc"
         OpenRC
         break
-    elif [ "$init_choice" = "systemd" ]; then
+    elif [ "$init_choice" = "2" ]; then
         SystemD
+        INIT="systemd"
         break
     else
         echo "Invalid Input"
@@ -493,16 +496,10 @@ echo "This is optional, but HIGHLY recommended."
 echo "Note: The time this command takes varies."
 while true; do
     read -r -p "Please answer [Y/N]: " world_choice
-    if [ "$world_choice" = "y" ]; then
+    if [ "$world_choice" = "y" ] || [ "$world_choice" = "Y" ]; then
         EmergeWorld
         break
-    elif [ "$world_choice" = "Y" ]; then
-        EmergeWorld
-        break
-    elif [ "$world_choice" = "n" ]; then
-        echo "Will not emerge @world"
-        break
-    elif [ "$world_choice" = "N" ]; then
+    elif [ "$world_choice" = "n" ] || [ "$world_choice" = "N" ]; then
         echo "Will not emerge @world"
         break
     else
@@ -517,33 +514,34 @@ EOF
 
 echo "You have the choice of 4 popular text editors"
 echo 'if your prefered option is not listed, please firmly state "none"'
-echo "- nano"
-echo "- vim"
-echo "- neovim"
-echo "- emacs"
+echo "1. nano"
+echo "2. vim"
+echo "3. neovim"
+echo "4. emacs"
+echo "5. none"
 while true; do
-    read -r -p "Please cleanly state your choice in lowercase for your selection: " text_choice
-    if [ "$text_choice" = "neovim" ]; then
+    read -r -p "Please enter choice from 1 to 5: " text_choice
+    if [ "$text_choice" = "3" ]; then
         InstallNeovim
         break
-    elif [ "$text_choice" = "vim" ]; then
+    elif [ "$text_choice" = "2" ]; then
         InstallVim
         break
-    elif [ "$text_choice" = "nano" ]; then
+    elif [ "$text_choice" = "1" ]; then
         InstallNano
         break
-    elif [ "$text_choice" = "emacs" ]; then
+    elif [ "$text_choice" = "4" ]; then
         InstallEmacs
         break
-    elif [ "$text_choice" = "none" ]; then
+    elif [ "$text_choice" = "5" ]; then
         break
     else
         echo "Invalid input. Your choices must be one of the following choices:"
-        echo "- nano"
-        echo "- vim"
-        echo "- neovim"
-        echo "- emacs"
-        echo "- none"
+        echo "1. nano"
+        echo "2. vim"
+        echo "3. neovim"
+        echo "4. emacs"
+        echo "5. none"
     fi
 done
 
@@ -563,18 +561,11 @@ while true; do
         echo "Seeing as you are building your own kernel,"
         echo "would you like for grub to be installed but unconfigured?"
         read -r -p "Please answer Y/N: " own_kernel_choice
-        if [ "$own_kernel_choice" = "y" ]; then
+        if [ "$own_kernel_choice" = "y" ] || [ "$own_kernel_choice" = "Y" ]; then
             echo "Got it, emerging grub bootloader"
             GrubBootLoader
             break
-        elif [ "$own_kernel_choice" = "Y" ]; then
-            echo "Got it, emerging grub bootloader"
-            GrubBootLoader
-            break
-        elif [ "$own_kernel_choice" = "n" ]; then
-            echo "Got it. A bootloader will NOT be installed"
-            break
-        elif [ "$own_kernel_choice" = "N" ]; then
+        elif [ "$own_kernel_choice" = "n" ] || [ "$own_kernel_choice" = "N" ]; then
             echo "Got it. A bootloader will NOT be installed"
             break
         fi
@@ -592,23 +583,29 @@ EOF
 echo "Done!"
 HNAME="$hname_choice"
 
-echo "Is this build with SystemD? or OpenRC?"
-while true; do
-    read -r -p 'Please clearly state "systemd" or "openrc" in lowercase for your selection: ' init_conf
-    if [ "$init_conf" = "openrc" ]; then
-        echo "Setting up networking"
-        ConfigureNetifrc
-        echo "Done"
-        break
-    elif [ "$init_conf" = "systemd" ]; then
-        echo "Setting up networking"
-        ConfigureNetworkManager
-        echo "Done"
-        break
-    else
-        echo "Invalid input"
-    fi
-done
+if [ "$INIT" = "openrc" ]; then
+    echo "Choose a Network Manager for your system"
+    echo "1. Netifrc (Native)"
+    echo "2. NetworkManager"
+    while true; do
+        read -r -p 'Please state your selection between 1 and 2: ' net_choice
+        if [ "$net_choice" = "1" ]; then
+            echo "Setting up Netifrc as Network Manager"
+            ConfigureNetifrc
+            echo "Done"
+            break
+        elif [ "$net_choice" = "2" ]; then
+            echo "Setting up Network Manager"
+            ConfigureNetworkManager
+            echo "Done"
+            break
+        else
+            echo "Invalid Input"
+        fi
+    done
+else
+    ConfigureNetworkManager
+fi
 
 echo "What is your preferred privilege escalation tool?"
 echo "Do you prefer Doas, or Sudo?"
@@ -637,6 +634,7 @@ read -r -p "Please create a username for the user: " NEWUSER
 read -r -p "Please enter the password for the user: " PASSWD
 AddUser
 
+# TODO: Add the options of igpu
 echo "What kind of GPU do you have?"
 while true; do
     read -r -p 'Please state "nvidia" or "amd" in lowercase: ' gpu_choice
@@ -646,6 +644,7 @@ while true; do
         echo "Done"
         break
     elif [ "$gpu_choice" = "amd" ]; then
+        # TODO: Add a function which adds the VIDEO_CARDS variable in the make.conf for better clarity to the portage
         echo "Got it. proceeding"
         break
     else
