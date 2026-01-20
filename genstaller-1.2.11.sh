@@ -308,12 +308,12 @@ Configurefstab() {
     DISK1="${DISK}1"
     DISK2="${DISK}2"
     DISK3="${DISK}3"
-    cat >./configs/fstab <<FSTAB
+    cat >/root/temp/fstab <<FSTAB
 $DISK1 /boot/efi vfat defaults 0 2
 $DISK2 none swap sw 0 0
 $DISK3 / ext4 noatime 0 1
 FSTAB
-    cp ./configs/fstab "$GEN"
+    cp /root/temp/fstab "$GEN"
     chroot "$GEN" /bin/bash <<'EOF'
 echo "Setting up fstab"
 mv /fstab /etc/fstab
@@ -321,18 +321,33 @@ echo "Done!"
 EOF
 }
 
+SetHosts() {
+    cat >/root/temp/hosts <<HOSTS
+127.0.0.1 $HNAME"
+HOSTS
+    mv /root/temp/hosts "$GEN"
+    chroot "$GEN" /bin/bash <<'EOF'
+cat /hosts >> /etc/hosts
+rm /hosts
+EOF
+}
+
 # TODO: Modify the function to correctly symlink the internet
 ConfigureNetifrc() {
     net_name="$(ip route get 8.8.8.8 | awk '{print $5}')"
+    SetHosts
+    cat >/root/temp/net <<NET
+config_$net_name="dhcp"
+NET
+    mv /root/temp/net "$GEN"
     chroot "$GEN" /bin/bash <<'EOF'
-echo 127.0.0.1 "$HNAME" >> /etc/hosts
 emerge -v net-misc/dhcpcd
 eselect news read
 emerge -v --noreplace net-misc/netifrc
 eselect news read
-echo "config_\${NET_IF}=\"dhcp\"" >> /etc/conf.d/net
-ln -s /etc/init.d/net.lo /etc/init.d/net.\${NET_IF}
-rc-update add net.\${NET_IF} default
+cat /net >> /etc/conf.d/net
+ln -s /etc/init.d/net.lo /etc/init.d/net.${NET_IF}
+rc-update add net.${NET_IF} default
 EOF
 }
 
@@ -349,8 +364,8 @@ EOF
 }
 
 ConfigureNetworkManager() {
+    SetHosts
     chroot "$GEN" /bin/bash <<'EOF'
-echo 127.0.0.1 "$HNAME" >> /etc/hosts
 emerge -v net-misc/networkmanager
 EOF
     EnableNetworkManager
@@ -396,6 +411,8 @@ EOF
 
 RootCheck
 TestNetwork
+
+mkdir -p /root/temp
 
 echo "What is the current time?"
 while true; do
@@ -652,8 +669,12 @@ while true; do
     fi
 done
 
+# TODO: For SystemD it is necessary to implement the extra machine-id and configurations
+
 echo "Leaving Chroot environment"
 # =====END OF CHROOT ENVIRONMENT=====
+
+rm -rf /root/temp
 
 echo "Done!"
 lsblk
